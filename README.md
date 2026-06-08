@@ -38,6 +38,18 @@ Claude Code ──MCP──> server.py (futu-api) ──TCP──> OpenD 閘道 
 
 ## 3. 安裝本專案
 
+### 一鍵安裝（建議，macOS / Linux）
+
+先確認 OpenD 已啟動並登入，然後：
+
+```bash
+./setup.sh
+```
+
+腳本會自動：檢查 Python 3.10+ → 建立 venv 並安裝 → 產生 `.env` → 測試 OpenD 連線 → 接上 Claude Code。
+
+### 手動安裝（替代方案）
+
 ```bash
 # 建議用 uv
 uv venv && source .venv/bin/activate
@@ -45,12 +57,9 @@ uv pip install -e .
 
 # 或用 pip
 pip install -e .
-```
 
-設定連線（可選，預設就是 127.0.0.1:11111）：
-
-```bash
-cp .env.example .env   # 視需要修改 FUTU_HOST / FUTU_PORT
+# 設定連線（可選，預設就是 127.0.0.1:11111）
+cp .env.example .env
 ```
 
 ---
