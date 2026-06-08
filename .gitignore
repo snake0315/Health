@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+
+# Futu OpenD artifacts / logs
+FutuOpenD.xml
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
