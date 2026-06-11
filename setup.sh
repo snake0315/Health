@@ -36,7 +36,9 @@ echo
 info "Checking prerequisites"
 
 PY=""
-for cand in python3 python; do
+# Scan both unversioned and version-specific interpreter names so a freshly
+# `brew install python@3.12` is picked up even when the system `python3` is old.
+for cand in python3.13 python3.12 python3.11 python3.10 python3 python; do
   if command -v "$cand" >/dev/null 2>&1; then
     ver="$("$cand" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "0.0")"
     major="${ver%%.*}"; minor="${ver##*.}"
@@ -46,7 +48,9 @@ done
 
 if [ -z "$PY" ]; then
   fail "Python 3.10+ not found."
-  echo "    Install it first, e.g.:  brew install python@3.12"
+  echo "    Install it first:"
+  echo "      brew install python@3.12      # needs Homebrew (https://brew.sh)"
+  echo "    then re-run ./setup.sh"
   exit 1
 fi
 ok "Python: $($PY --version)"
