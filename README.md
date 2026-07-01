@@ -124,6 +124,25 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 
 ---
 
+## 範例分析：每年 7 月前幾個交易日的 SPY / QQQ
+
+`analysis/july_first5.py` 用上面的 `get_history_kline` 工具，統計**過去 N 年、
+每年 7 月前 K 個交易日**的 SPY / QQQ **每日漲跌幅**與**波動度**（日內振幅 + 漲跌幅標準差）。
+
+> 需先啟動並登入 OpenD（同一般用法），因為資料是即時向富途伺服器取得的。
+
+```bash
+# 預設：US.SPY / US.QQQ、過去 10 年、每年 7 月前 5 個交易日
+python analysis/july_first5.py
+
+# 自訂範圍並輸出明細 CSV
+python analysis/july_first5.py --years 10 --days 5 \
+    --symbols US.SPY US.QQQ --csv july_first5.csv
+```
+
+輸出欄位：`daily_chg%`＝收盤對前一日收盤漲跌幅；`range%`＝當日 (最高-最低)/前收
+的日內波動度。每年與全期會另給平均漲跌、漲跌幅標準差（波動度）與平均振幅。
+
 ## 注意事項
 
 - 本專案**刻意不提供交易功能**。若日後要加，請另接 `OpenSecTradeContext` 並加上確認機制。
