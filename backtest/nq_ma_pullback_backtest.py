@@ -19,9 +19,11 @@
   --futu       Futu OpenD（預設代碼 US.NQmain，需本機 OpenD 已登入）
 
 範例：
-  python backtest/nq_ma_pullback_backtest.py --yf
+  # 美股正常盤、過去兩年（Futu OpenD 需已登入且有 CME 期貨行情權限）
+  python backtest/nq_ma_pullback_backtest.py --futu \
+      --start 2024-07-28 --end 2026-07-28 --session 0930-1600
+  python backtest/nq_ma_pullback_backtest.py --yf --session 0930-1600
   python backtest/nq_ma_pullback_backtest.py --csv nq_5m.csv --session 0930-1600
-  python backtest/nq_ma_pullback_backtest.py --futu --start 2026-05-01 --end 2026-07-28
 
 依賴：pandas（--yf 另需 yfinance，--futu 另需 futu-api）。
 """
@@ -101,12 +103,17 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
     bucket = df.index.floor("15min")
     df["ma15"] = ma15.reindex(bucket).to_numpy()
 
+    # 時段過濾只限制「回踩發生的時間」；未來 fwd 根仍用連續的完整資料，
+    # 與 Pine 腳本在期貨全時段圖上的行為一致。K 棒時間視為該棒起始時間，
+    # 因此 "0930-1600" 涵蓋 09:30 起至 15:55 起始的棒（不含 16:00）。
     if session:  # 例如 "0930-1600"（美東時間）
         h0, h1 = session.split("-")
-        ny = df.index.tz_convert("America/New_York") if df.index.tz else \
+        ny = df.index.tz_convert("America/New_York") if df.index.tz is not None else \
             df.index.tz_localize("America/New_York")
         hhmm = ny.strftime("%H%M")
-        df = df[(hhmm >= h0) & (hhmm <= h1)]
+        sess_ok = (hhmm >= h0) & (hhmm < h1)
+    else:
+        sess_ok = [True] * len(df)
 
     o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
     ma5, ma15v = df["ma5"].to_numpy(), df["ma15"].to_numpy()
@@ -118,7 +125,8 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
         above_cnt = above_cnt + 1 if (ma5[i] == ma5[i] and l[i] > ma5[i]) else 0
         if i == 0 or ma5[i] != ma5[i] or ma15v[i] != ma15v[i]:
             continue
-        touch = prev_above >= re_arm and l[i] <= ma5[i] and c[i - 1] > ma15v[i]
+        touch = prev_above >= re_arm and l[i] <= ma5[i] and c[i - 1] > ma15v[i] \
+            and sess_ok[i]
         if not touch or i + fwd >= len(df):
             continue
         ref = ma5[i] if ref_is_ma else c[i]
@@ -179,7 +187,8 @@ def main() -> None:
     ap.add_argument("--fwd", type=int, default=6, help="未來觀察 K 棒數（預設 6）")
     ap.add_argument("--re-arm", type=int, default=3,
                     help="重新計數門檻：連續高於 5 分 MA 的根數（預設 3）")
-    ap.add_argument("--session", help='只統計美東時段，例如 "0930-1600"')
+    ap.add_argument("--session",
+                    help='回踩發生時間限定美東時段，例如 "0930-1600"（正常盤）')
     ap.add_argument("--ref-close", action="store_true",
                     help="漲幅基準改用回踩當根收盤價（預設用 MA 值）")
     ap.add_argument("--dump-events", help="把每筆事件輸出成 CSV")

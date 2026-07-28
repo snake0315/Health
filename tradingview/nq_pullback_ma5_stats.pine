@@ -17,6 +17,10 @@
 //
 // 15 分 20MA 預設使用「已收盤的 15 分 K」計算（不重繪、無未來函數）；
 // 可切換成即時值，但即時值在歷史回測上會略帶前視偏差。
+//
+// 預設統計範圍：美股正常盤（09:30–16:00 美東）、2024-07-28 起（近兩年）。
+// 實際能統計多久受 TradingView 方案的歷史 K 棒上限影響——
+// 表格最後一列會顯示圖表實際載入的資料起點，若晚於開始日期會標警告。
 // ─────────────────────────────────────────────────────────────────────────────
 indicator("NQ 回踩5分20MA統計｜15分20MA上方", "回踩5MA統計", overlay = true, max_labels_count = 500)
 
@@ -32,9 +36,10 @@ refType           = input.string("MA值(回踩點)", "漲跌幅基準價",
      options = ["MA值(回踩點)", "回踩當根收盤價"])
 inclTouchBarBreak = input.bool(true, "跌破判定含回踩當根")
 strictAbove15     = input.bool(false, "回踩當根低點也須高於 15 分 MA")
-useSession        = input.bool(false, "只統計指定時段（美東時間）")
+useSession        = input.bool(true, "只統計指定時段（美東時間）",
+     tooltip = "只限制「回踩發生的時間」；未來 6 根仍用圖上接續的 K 棒")
 sess              = input.session("0930-1600", "統計時段")
-startTime         = input.time(timestamp("1 Jan 2020 00:00 +0000"), "開始日期")
+startTime         = input.time(timestamp("28 Jul 2024 00:00 +0000"), "開始日期")
 showMarks         = input.bool(true, "顯示回踩 / 跌破標記")
 showLabels        = input.bool(false, "顯示每次事件結果標籤")
 
@@ -54,6 +59,11 @@ plot(ma15, "15分 20MA", color.new(color.blue, 0), 2)
 // ── 事件偵測 ─────────────────────────────────────────────────────────────────
 var int aboveCnt = 0
 aboveCnt := low > ma5 ? aboveCnt + 1 : 0
+
+// 圖表實際載入的資料起點（受 TradingView 方案的歷史 K 棒上限影響）
+var int firstBarT = na
+if na(firstBarT)
+    firstBarT := time
 
 inSession = not useSession or not na(time(timeframe.period, sess, "America/New_York"))
 trendOK   = close[1] > ma15 and (not strictAbove15 or low > ma15)
@@ -150,3 +160,7 @@ if barstate.islast
          str.tostring(avgGainBrk, "#.###") + "%", color.orange)
     cell(8, "未來" + str.tostring(fwdBars) + "根 平均最大跌幅",
          na(avgDropPct) ? "—" : str.tostring(avgDropPct, "#.###") + "%", color.red)
+    cell(9, "圖表資料起點",
+         str.format_time(firstBarT, "yyyy-MM-dd", "America/New_York") +
+         (firstBarT > startTime ? " ⚠ 未達開始日期" : ""),
+         firstBarT > startTime ? color.orange : color.gray)

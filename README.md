@@ -137,8 +137,9 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 # yfinance（最近約 60 天 5 分 K）
 python backtest/nq_ma_pullback_backtest.py --yf
 
-# Futu OpenD（需已啟動並登入）
-python backtest/nq_ma_pullback_backtest.py --futu --start 2026-01-01 --end 2026-07-28
+# Futu OpenD（需已啟動並登入）：美股正常盤、過去兩年
+python backtest/nq_ma_pullback_backtest.py --futu \
+    --start 2024-07-28 --end 2026-07-28 --session 0930-1600
 
 # TradingView 匯出 CSV，只統計美股正常盤
 python backtest/nq_ma_pullback_backtest.py --csv nq_5m.csv --session 0930-1600
