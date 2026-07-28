@@ -124,6 +124,30 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 
 ---
 
+## 8. NQ 回踩 5 分 20MA 統計工具
+
+回答「**價格在 15 分 20MA 上方時，回踩 5 分 20MA 的跌破機率**，以及**未來 6 根 5 分 K 的平均最大漲幅**」，提供兩個定義完全一致的工具：
+
+| 檔案 | 用途 |
+|---|---|
+| `tradingview/nq_pullback_ma5_stats.pine` | 貼進 TradingView（NQ 5 分鐘圖）即時統計，右上角表格顯示結果 |
+| `backtest/nq_ma_pullback_backtest.py` | 本地回測，資料來源可選 Futu OpenD（`US.NQmain`）、yfinance（`NQ=F`）或 TradingView 匯出 CSV |
+
+```bash
+# yfinance（最近約 60 天 5 分 K）
+python backtest/nq_ma_pullback_backtest.py --yf
+
+# Futu OpenD（需已啟動並登入）
+python backtest/nq_ma_pullback_backtest.py --futu --start 2026-01-01 --end 2026-07-28
+
+# TradingView 匯出 CSV，只統計美股正常盤
+python backtest/nq_ma_pullback_backtest.py --csv nq_5m.csv --session 0930-1600
+```
+
+事件定義（兩邊一致、皆可調參數）：前一根 5 分 K 收盤在 15 分 20MA 上方且已連續 3 根低點高於 5 分 20MA → 當根低點觸及 5 分 20MA 記為一次「回踩」；回踩起 6 根內任一收盤價低於 5 分 20MA 記為「跌破」；最大漲幅 = 未來 6 根最高價相對回踩點（觸及當下的 MA 值）的漲幅。15 分 MA 使用已收盤的 15 分 K 值（不重繪、無未來函數）。
+
+---
+
 ## 注意事項
 
 - 本專案**刻意不提供交易功能**。若日後要加，請另接 `OpenSecTradeContext` 並加上確認機制。
