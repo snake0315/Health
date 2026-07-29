@@ -26,7 +26,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from nq_ma_pullback_backtest import backtest
+from nq_ma_pullback_backtest import backtest, summarize
 
 
 def make_index(start: str, end: str) -> pd.DatetimeIndex:
@@ -71,23 +71,31 @@ def main() -> None:
 
     idx = make_index(args.start, args.end)
     print(f"模擬範圍：{args.start} ~ {args.end}，{len(idx)} 根 5 分 K/情境，"
-          f"{args.seeds} 個種子\n")
-    print("＊＊隨機基準線（非真實 NQ 統計）＊＊　條件：正常盤 0930-1600 回踩")
-    hdr = f"{'年化趨勢':>8} | {'樣本/2年':>8} | {'跌破機率':>8} | {'平均最大漲幅':>12} | {'中位數':>8}"
-    print(hdr)
-    print("-" * len(hdr))
+          f"{args.seeds} 個種子（樣本欄為每兩年平均）\n")
+    print("＊＊隨機基準線（非真實 NQ 統計）＊＊　條件：正常盤 0930-1600 回踩，"
+          "依 1H 均線排列分組")
+    hdr = (f"{'年化趨勢':>8} {'分組':>6} | {'樣本/2年':>8} | {'跌破機率':>8} | "
+           f"{'平均最大漲幅':>12} | {'中位數':>8}")
     for drift in (-0.20, 0.0, 0.30):
-        rows = []
+        evs = []
         for seed in range(args.seeds):
             df = simulate(idx, drift, seed)
             r = backtest(df, session="0930-1600")
             if r["n"]:
-                rows.append((r["n"], r["p_break"], r["avg_gain_pct"], r["med_gain_pct"]))
-        a = np.array(rows)
-        m, s = a.mean(axis=0), a.std(axis=0)
-        print(f"{drift:>+7.0%} | {m[0]:>8.0f} | {m[1]:>6.1f}%±{s[1]:.1f} | "
-              f"{m[2]:>8.3f}%±{s[2]:.3f} | {m[3]:>7.3f}%")
-    print("\n解讀：真實資料的跌破機率低於同趨勢基準 → 均線有實際支撐效果；")
+                evs.append(r["events"])
+        ev = pd.concat(evs, ignore_index=True)
+        print(hdr)
+        print("-" * len(hdr))
+        for name, sub in [("全部", ev)] + \
+                [(g, ev[ev["h1"] == g]) for g in ("1H多頭", "1H空頭", "其他")]:
+            if not len(sub):
+                continue
+            s = summarize(sub)
+            print(f"{drift:>+7.0%} {name:>6} | {s['n'] / args.seeds:>8.0f} | "
+                  f"{s['p_break']:>7.1f}% | {s['avg_gain_pct']:>10.3f}% | "
+                  f"{s['med_gain_pct']:>7.3f}%")
+        print()
+    print("解讀：真實資料的跌破機率低於同趨勢基準 → 均線有實際支撐效果；")
     print("平均最大漲幅高於基準 → 回踩後反彈有超額表現。接近基準則多為趨勢/波動本身。")
 
 

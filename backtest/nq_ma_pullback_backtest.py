@@ -13,6 +13,10 @@
 
 15 分 20MA 一律用「已收盤的 15 分 K」計算（對齊 Pine 的不重繪模式）。
 
+另依「1 小時均線排列」把事件分成三組對照輸出：
+  1H多頭 = 1H MA5 > MA10 > MA20；1H空頭 = MA5 < MA10 < MA20；其餘 = 其他。
+（均線長度可用 --h1-ma 調整，同樣用已收盤 1H K 判定。）
+
 資料來源（三選一）：
   --csv PATH   TradingView 匯出的 5 分 K CSV（需含 time/open/high/low/close 欄位）
   --yf         Yahoo Finance NQ=F（yfinance 只提供最近約 60 天的 5 分 K）
@@ -93,7 +97,8 @@ def load_futu(code: str, start: str | None, end: str | None) -> pd.DataFrame:
 
 def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
              incl_touch_bar_break: bool = True, ref_is_ma: bool = True,
-             session: str | None = None) -> dict:
+             session: str | None = None,
+             h1_ma: tuple[int, int, int] = (5, 10, 20)) -> dict:
     df = df.dropna().copy()
     df["ma5"] = df["close"].rolling(ma_len).mean()
 
@@ -102,6 +107,18 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
     ma15 = c15.rolling(ma_len).mean().shift(1)
     bucket = df.index.floor("15min")
     df["ma15"] = ma15.reindex(bucket).to_numpy()
+
+    # 1 小時均線排列（短/中/長，預設 5/10/20），同樣用已收盤 1H K。
+    # 以整點分桶近似 TradingView 的 60 分 K（期貨開盤錨點略有差異）。
+    c60 = df["close"].resample("60min", label="left", closed="left").last().dropna()
+    b60 = df.index.floor("60min")
+    h1 = {n: c60.rolling(n).mean().shift(1).reindex(b60).to_numpy() for n in h1_ma}
+    f_, m_, s_ = (h1[n] for n in h1_ma)
+    bull = (f_ > m_) & (m_ > s_)
+    bear = (f_ < m_) & (m_ < s_)
+    df["h1_grp"] = pd.Series(
+        pd.NA, index=df.index, dtype="object").mask(bull, "1H多頭").mask(bear, "1H空頭")
+    df.loc[~bull & ~bear & (s_ == s_), "h1_grp"] = "其他"  # s_==s_ 排除暖身期 NaN
 
     # 時段過濾只限制「回踩發生的時間」；未來 fwd 根仍用連續的完整資料，
     # 與 Pine 腳本在期貨全時段圖上的行為一致。K 棒時間視為該棒起始時間，
@@ -117,13 +134,14 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
 
     o, h, l, c = (df[k].to_numpy() for k in ("open", "high", "low", "close"))
     ma5, ma15v = df["ma5"].to_numpy(), df["ma15"].to_numpy()
+    h1_grp = df["h1_grp"].to_numpy()
 
     above_cnt = 0
     events = []
     for i in range(len(df)):
         prev_above = above_cnt
         above_cnt = above_cnt + 1 if (ma5[i] == ma5[i] and l[i] > ma5[i]) else 0
-        if i == 0 or ma5[i] != ma5[i] or ma15v[i] != ma15v[i]:
+        if i == 0 or ma5[i] != ma5[i] or ma15v[i] != ma15v[i] or h1_grp[i] is pd.NA:
             continue
         touch = prev_above >= re_arm and l[i] <= ma5[i] and c[i - 1] > ma15v[i] \
             and sess_ok[i]
@@ -135,7 +153,7 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
         broke = broke or any(c[j] < ma5[j] for j in range(i + 1, i + 1 + fwd))
         gain_pts = h[win].max() - ref
         events.append({
-            "time": df.index[i], "ref": ref, "broke": broke,
+            "time": df.index[i], "ref": ref, "broke": broke, "h1": h1_grp[i],
             "gain_pct": 100.0 * gain_pts / ref, "gain_pts": gain_pts,
             "drop_pct": 100.0 * (l[win].min() - ref) / ref,
         })
@@ -143,6 +161,14 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
     ev = pd.DataFrame(events)
     if ev.empty:
         return {"n": 0}
+    out = summarize(ev)
+    out["events"] = ev
+    out["groups"] = {g: summarize(ev[ev["h1"] == g])
+                     for g in ("1H多頭", "1H空頭", "其他") if (ev["h1"] == g).any()}
+    return out
+
+
+def summarize(ev: pd.DataFrame) -> dict:
     hold = ev[~ev["broke"]]
     brk = ev[ev["broke"]]
     return {
@@ -155,7 +181,6 @@ def backtest(df: pd.DataFrame, ma_len: int = 20, fwd: int = 6, re_arm: int = 3,
         "avg_gain_hold": hold["gain_pct"].mean() if len(hold) else float("nan"),
         "avg_gain_break": brk["gain_pct"].mean() if len(brk) else float("nan"),
         "avg_drop_pct": ev["drop_pct"].mean(),
-        "events": ev,
     }
 
 
@@ -171,6 +196,16 @@ def report(r: dict, fwd: int) -> None:
     print(f"守住時 平均最大漲幅       : {r['avg_gain_hold']:.3f}%")
     print(f"跌破時 平均最大漲幅       : {r['avg_gain_break']:.3f}%")
     print(f"未來{fwd}根 平均最大跌幅   : {r['avg_drop_pct']:.3f}%")
+    if r.get("groups"):
+        print("\n── 依 1 小時均線排列分組（短>中>長 = 多頭；短<中<長 = 空頭）──")
+        hdr = (f"{'分組':>6} | {'樣本':>5} | {'跌破機率':>7} | {'平均最大漲幅':>10} | "
+               f"{'中位數':>7} | {'守住時':>7} | {'平均最大跌幅':>10}")
+        print(hdr)
+        print("-" * len(hdr))
+        for name, g in r["groups"].items():
+            print(f"{name:>6} | {g['n']:>5} | {g['p_break']:>6.1f}% | "
+                  f"{g['avg_gain_pct']:>8.3f}% | {g['med_gain_pct']:>6.3f}% | "
+                  f"{g['avg_gain_hold']:>6.3f}% | {g['avg_drop_pct']:>8.3f}%")
 
 
 def main() -> None:
@@ -191,6 +226,8 @@ def main() -> None:
                     help='回踩發生時間限定美東時段，例如 "0930-1600"（正常盤）')
     ap.add_argument("--ref-close", action="store_true",
                     help="漲幅基準改用回踩當根收盤價（預設用 MA 值）")
+    ap.add_argument("--h1-ma", default="5,10,20",
+                    help='1 小時均線排列的短,中,長長度（預設 "5,10,20"）')
     ap.add_argument("--dump-events", help="把每筆事件輸出成 CSV")
     args = ap.parse_args()
 
@@ -202,8 +239,9 @@ def main() -> None:
         df = load_futu(args.code, args.start, args.end)
 
     print(f"資料範圍：{df.index[0]} ~ {df.index[-1]}（{len(df)} 根 5 分 K）")
+    h1_ma = tuple(int(x) for x in args.h1_ma.split(","))
     r = backtest(df, ma_len=args.ma_len, fwd=args.fwd, re_arm=args.re_arm,
-                 ref_is_ma=not args.ref_close, session=args.session)
+                 ref_is_ma=not args.ref_close, session=args.session, h1_ma=h1_ma)
     report(r, args.fwd)
     if args.dump_events and r["n"] > 0:
         r["events"].to_csv(args.dump_events, index=False)

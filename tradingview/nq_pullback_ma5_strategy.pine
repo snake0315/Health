@@ -17,6 +17,9 @@
 //      基準 = 回踩當根收盤價 = 進場價）。要換算點數：Run-up USD ÷ 20（NQ 一口
 //      $20/點；MNQ 為 $2/點）。
 //   5. 一般（非深度回測）模式下，右上角仍會顯示與指標版相同的統計表格。
+//   6. 1H 均線排列分組：進場訊號已標記「回踩·1H多頭 / 回踩·1H空頭 / 回踩·其他」
+//      （1H多頭 = 1H MA5 > MA10 > MA20；空頭反之；其餘 = 其他）。
+//      匯出 CSV 後依進場訊號分組，即可分別計算三組的跌破機率與 Run-up 平均。
 //
 // 交易 = 統計事件的對應方式：
 //   • 進場：回踩事件成立時，於回踩當根「收盤」市價買進 1 口
@@ -47,6 +50,9 @@ useSession      = input.bool(true, "只統計指定時段（美東時間）")
 sess            = input.session("0930-1600", "統計時段")
 startTime       = input.time(timestamp("28 Jul 2024 00:00 +0000"), "開始日期",
      tooltip = "深度回測模式的實際範圍以策略測試器的日期設定為準")
+h1fLen          = input.int(5,  "1H 短均線", minval = 1, group = "1小時均線排列")
+h1mLen          = input.int(10, "1H 中均線", minval = 1, group = "1小時均線排列")
+h1sLen          = input.int(20, "1H 長均線", minval = 1, group = "1小時均線排列")
 showMarks       = input.bool(true, "顯示回踩標記")
 
 // ── 均線 ────────────────────────────────────────────────────────────────────
@@ -56,6 +62,20 @@ htfMaConfirmed = request.security(syminfo.tickerid, htf, ta.sma(close, maLen)[1]
 htfMaLive = request.security(syminfo.tickerid, htf, ta.sma(close, maLen),
      lookahead = barmerge.lookahead_off)
 ma15 = useConfirmedHTF ? htfMaConfirmed : htfMaLive
+
+h1fC = request.security(syminfo.tickerid, "60", ta.sma(close, h1fLen)[1], lookahead = barmerge.lookahead_on)
+h1mC = request.security(syminfo.tickerid, "60", ta.sma(close, h1mLen)[1], lookahead = barmerge.lookahead_on)
+h1sC = request.security(syminfo.tickerid, "60", ta.sma(close, h1sLen)[1], lookahead = barmerge.lookahead_on)
+h1fL = request.security(syminfo.tickerid, "60", ta.sma(close, h1fLen), lookahead = barmerge.lookahead_off)
+h1mL = request.security(syminfo.tickerid, "60", ta.sma(close, h1mLen), lookahead = barmerge.lookahead_off)
+h1sL = request.security(syminfo.tickerid, "60", ta.sma(close, h1sLen), lookahead = barmerge.lookahead_off)
+h1f = useConfirmedHTF ? h1fC : h1fL
+h1m = useConfirmedHTF ? h1mC : h1mL
+h1s = useConfirmedHTF ? h1sC : h1sL
+
+// 1H 排列分組：0 = 多頭排列、1 = 空頭排列、2 = 其他
+grp = h1f > h1m and h1m > h1s ? 0 : h1f < h1m and h1m < h1s ? 1 : 2
+grpName = grp == 0 ? "1H多頭" : grp == 1 ? "1H空頭" : "其他"
 
 plot(ma5, "5分 20MA", color.orange, 2)
 plot(ma15, "15分 20MA", color.new(color.blue, 0), 2)
@@ -71,14 +91,18 @@ if na(firstBarT)
 inSession = not useSession or not na(time(timeframe.period, sess, "America/New_York"))
 trendOK   = close[1] > ma15 and (not strictAbove15 or low > ma15)
 touch     = aboveCnt[1] >= reArmBars and low <= ma5 and trendOK and
-     not na(ma15) and time >= startTime and inSession
+     not na(ma15) and not na(h1s) and time >= startTime and inSession
 
-plotshape(showMarks and touch, "回踩 5 分 20MA", shape.triangleup,
-     location.belowbar, color.orange, size = size.tiny)
+plotshape(showMarks and touch and grp == 0, "回踩(1H多頭)", shape.triangleup,
+     location.belowbar, color.green, size = size.tiny)
+plotshape(showMarks and touch and grp == 1, "回踩(1H空頭)", shape.triangleup,
+     location.belowbar, color.red, size = size.tiny)
+plotshape(showMarks and touch and grp == 2, "回踩(其他)", shape.triangleup,
+     location.belowbar, color.gray, size = size.tiny)
 
-// ── 進出場 ──────────────────────────────────────────────────────────────────
+// ── 進出場（進場訊號帶 1H 排列標記，供交易清單 CSV 分組）────────────────────
 if touch and strategy.position_size == 0
-    strategy.entry("回踩", strategy.long, comment = "回踩進場")
+    strategy.entry("回踩", strategy.long, comment = "回踩·" + grpName)
 
 if strategy.position_size > 0
     heldBars = bar_index - strategy.opentrades.entry_bar_index(0)

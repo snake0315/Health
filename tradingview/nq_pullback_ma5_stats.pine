@@ -1,11 +1,13 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
-// NQ 回踩 5 分 20MA 統計（15 分 20MA 上方過濾）
+// NQ 回踩 5 分 20MA 統計（15 分 20MA 上方過濾）＋ 1 小時均線排列分組
 //
 // 用法：
 //   1. 開啟 TradingView，商品選 NQ（例如 CME_MINI:NQ1!），週期切到 5 分鐘。
 //   2. Pine 編輯器貼上本腳本 → 加到圖表。
-//   3. 右上角表格即顯示統計結果；橘色三角 = 回踩事件，紅色 X = 收盤跌破。
+//   3. 右上角表格顯示統計，並依 1 小時均線排列分成三組對照：
+//      1H多頭 = 1H MA5 > MA10 > MA20；1H空頭 = MA5 < MA10 < MA20；其餘 = 其他。
+//      圖上回踩三角形顏色：綠 = 1H多頭、紅 = 1H空頭、灰 = 其他。
 //
 // 統計定義（皆可由參數調整）：
 //   • 前置狀態：前一根 5 分 K 收盤在 15 分 20MA 上方，且已連續 N 根（預設 3）
@@ -14,15 +16,16 @@
 //   • 跌破：回踩當根起（可關閉）至未來 6 根內，任一根「收盤價」低於 5 分 20MA。
 //   • 最大漲幅：以回踩點（預設 = 觸及當下的 5 分 20MA 值）為基準，
 //     未來 6 根 5 分 K（不含回踩當根）最高價相對基準的漲幅。
+//   • 1H 排列：以回踩當根當下的 1 小時均線判定（預設用已收盤 1H K，不重繪）。
 //
-// 15 分 20MA 預設使用「已收盤的 15 分 K」計算（不重繪、無未來函數）；
+// 15 分 / 1 小時均線預設使用「已收盤 K」計算（不重繪、無未來函數）；
 // 可切換成即時值，但即時值在歷史回測上會略帶前視偏差。
 //
 // 預設統計範圍：美股正常盤（09:30–16:00 美東）、2024-07-28 起（近兩年）。
 // 實際能統計多久受 TradingView 方案的歷史 K 棒上限影響——
 // 表格最後一列會顯示圖表實際載入的資料起點，若晚於開始日期會標警告。
 // ─────────────────────────────────────────────────────────────────────────────
-indicator("NQ 回踩5分20MA統計｜15分20MA上方", "回踩5MA統計", overlay = true, max_labels_count = 500)
+indicator("NQ 回踩5分20MA統計｜15分20MA上方＋1H排列分組", "回踩5MA統計", overlay = true, max_labels_count = 500)
 
 // ── 參數 ────────────────────────────────────────────────────────────────────
 maLen             = input.int(20, "MA 長度", minval = 1)
@@ -31,7 +34,7 @@ fwdBars           = input.int(6, "未來觀察 K 棒數", minval = 1, maxval = 5
      tooltip = "回踩後往前看幾根 5 分 K 來計算最大漲幅與跌破")
 reArmBars         = input.int(3, "重新計數門檻（連續高於 5 分 MA 的根數）", minval = 1,
      tooltip = "回踩後需再連續此根數低點高於 5 分 MA，下一次觸碰才算新事件")
-useConfirmedHTF   = input.bool(true, "15分MA 用已收盤值（不重繪）")
+useConfirmedHTF   = input.bool(true, "高週期MA 用已收盤值（不重繪）")
 refType           = input.string("MA值(回踩點)", "漲跌幅基準價",
      options = ["MA值(回踩點)", "回踩當根收盤價"])
 inclTouchBarBreak = input.bool(true, "跌破判定含回踩當根")
@@ -40,18 +43,35 @@ useSession        = input.bool(true, "只統計指定時段（美東時間）",
      tooltip = "只限制「回踩發生的時間」；未來 6 根仍用圖上接續的 K 棒")
 sess              = input.session("0930-1600", "統計時段")
 startTime         = input.time(timestamp("28 Jul 2024 00:00 +0000"), "開始日期")
+h1fLen            = input.int(5,  "1H 短均線", minval = 1, group = "1小時均線排列")
+h1mLen            = input.int(10, "1H 中均線", minval = 1, group = "1小時均線排列")
+h1sLen            = input.int(20, "1H 長均線", minval = 1, group = "1小時均線排列")
 showMarks         = input.bool(true, "顯示回踩 / 跌破標記")
 showLabels        = input.bool(false, "顯示每次事件結果標籤")
 
 // ── 均線 ────────────────────────────────────────────────────────────────────
 ma5 = ta.sma(close, maLen)
-// 不重繪：取「上一根已收盤」15 分 K 的 MA 值
+// 不重繪：取「上一根已收盤」高週期 K 的 MA 值
 htfMaConfirmed = request.security(syminfo.tickerid, htf, ta.sma(close, maLen)[1],
      lookahead = barmerge.lookahead_on)
-// 即時：歷史 K 上會用到該 15 分 K 收盤後的值（略帶前視）
 htfMaLive = request.security(syminfo.tickerid, htf, ta.sma(close, maLen),
      lookahead = barmerge.lookahead_off)
 ma15 = useConfirmedHTF ? htfMaConfirmed : htfMaLive
+
+h1fC = request.security(syminfo.tickerid, "60", ta.sma(close, h1fLen)[1], lookahead = barmerge.lookahead_on)
+h1mC = request.security(syminfo.tickerid, "60", ta.sma(close, h1mLen)[1], lookahead = barmerge.lookahead_on)
+h1sC = request.security(syminfo.tickerid, "60", ta.sma(close, h1sLen)[1], lookahead = barmerge.lookahead_on)
+h1fL = request.security(syminfo.tickerid, "60", ta.sma(close, h1fLen), lookahead = barmerge.lookahead_off)
+h1mL = request.security(syminfo.tickerid, "60", ta.sma(close, h1mLen), lookahead = barmerge.lookahead_off)
+h1sL = request.security(syminfo.tickerid, "60", ta.sma(close, h1sLen), lookahead = barmerge.lookahead_off)
+h1f = useConfirmedHTF ? h1fC : h1fL
+h1m = useConfirmedHTF ? h1mC : h1mL
+h1s = useConfirmedHTF ? h1sC : h1sL
+
+// 1H 排列分組：0 = 多頭排列、1 = 空頭排列、2 = 其他
+grp = h1f > h1m and h1m > h1s ? 0 : h1f < h1m and h1m < h1s ? 1 : 2
+grpName(int g) =>
+    g == 0 ? "1H多頭" : g == 1 ? "1H空頭" : "其他"
 
 plot(ma5, "5分 20MA", color.orange, 2)
 plot(ma15, "15分 20MA", color.new(color.blue, 0), 2)
@@ -68,21 +88,26 @@ if na(firstBarT)
 inSession = not useSession or not na(time(timeframe.period, sess, "America/New_York"))
 trendOK   = close[1] > ma15 and (not strictAbove15 or low > ma15)
 touch     = aboveCnt[1] >= reArmBars and low <= ma5 and trendOK and
-     not na(ma15) and time >= startTime and inSession
+     not na(ma15) and not na(h1s) and time >= startTime and inSession
 
-// ── 統計（回踩後第 fwdBars 根收盤時回頭結算該事件）──────────────────────────
+// ── 統計（回踩後第 fwdBars 根收盤時回頭結算該事件，依 1H 排列分組）──────────
 hh = ta.highest(high, fwdBars)   // 涵蓋 offset 0..fwdBars-1 = 回踩後第 1..fwdBars 根
 ll = ta.lowest(low, fwdBars)
 
-var int   nTouch   = 0
-var int   nBreak   = 0
-var float sumGainPct  = 0.0
-var float sumGainPts  = 0.0
-var float sumDropPct  = 0.0
-var float sumGainHold = 0.0
-var int   nHold       = 0
-var float sumGainBrk  = 0.0
-var array<float> gains = array.new_float()
+var array<int>   nT   = array.new_int(3, 0)
+var array<int>   nB   = array.new_int(3, 0)
+var array<int>   nH   = array.new_int(3, 0)
+var array<float> sG   = array.new_float(3, 0.0)
+var array<float> sPts = array.new_float(3, 0.0)
+var array<float> sD   = array.new_float(3, 0.0)
+var array<float> sGH  = array.new_float(3, 0.0)
+var array<float> sGB  = array.new_float(3, 0.0)
+var array<float> gain0 = array.new_float()
+var array<float> gain1 = array.new_float()
+var array<float> gain2 = array.new_float()
+
+bump(array<float> a, int i, float v) =>
+    array.set(a, i, array.get(a, i) + v)
 
 if touch[fwdBars] and barstate.isconfirmed
     float ref = refType == "MA值(回踩點)" ? ma5[fwdBars] : close[fwdBars]
@@ -91,30 +116,38 @@ if touch[fwdBars] and barstate.isconfirmed
         if close[i] < ma5[i]
             broke := true
     if not na(ref) and ref > 0
+        int g = grp[fwdBars]
         gainPts = hh - ref
         gainPct = 100.0 * gainPts / ref
         dropPct = 100.0 * (ll - ref) / ref
-        nTouch      += 1
-        sumGainPct  += gainPct
-        sumGainPts  += gainPts
-        sumDropPct  += dropPct
-        array.push(gains, gainPct)
+        array.set(nT, g, array.get(nT, g) + 1)
+        bump(sG, g, gainPct)
+        bump(sPts, g, gainPts)
+        bump(sD, g, dropPct)
+        switch g
+            0 => array.push(gain0, gainPct)
+            1 => array.push(gain1, gainPct)
+            2 => array.push(gain2, gainPct)
         if broke
-            nBreak     += 1
-            sumGainBrk += gainPct
+            array.set(nB, g, array.get(nB, g) + 1)
+            bump(sGB, g, gainPct)
         else
-            nHold       += 1
-            sumGainHold += gainPct
+            array.set(nH, g, array.get(nH, g) + 1)
+            bump(sGH, g, gainPct)
         if showLabels
             label.new(bar_index - fwdBars, low[fwdBars],
-                 (broke ? "跌破 " : "守住 ") + str.tostring(gainPct, "#.##") + "%",
+                 grpName(g) + (broke ? "・跌破 " : "・守住 ") + str.tostring(gainPct, "#.##") + "%",
                  style = label.style_label_up, size = size.small,
                  color = broke ? color.new(color.red, 30) : color.new(color.green, 30),
                  textcolor = color.white)
 
-// ── 圖面標記 ─────────────────────────────────────────────────────────────────
-plotshape(showMarks and touch, "回踩 5 分 20MA", shape.triangleup,
-     location.belowbar, color.orange, size = size.tiny)
+// ── 圖面標記（三角形顏色 = 1H 排列分組）─────────────────────────────────────
+plotshape(showMarks and touch and grp == 0, "回踩(1H多頭)", shape.triangleup,
+     location.belowbar, color.green, size = size.tiny)
+plotshape(showMarks and touch and grp == 1, "回踩(1H空頭)", shape.triangleup,
+     location.belowbar, color.red, size = size.tiny)
+plotshape(showMarks and touch and grp == 2, "回踩(其他)", shape.triangleup,
+     location.belowbar, color.gray, size = size.tiny)
 bsTouch = ta.barssince(touch)
 breakMark = ta.crossunder(close, ma5) and not na(bsTouch) and bsTouch <= fwdBars
 plotshape(showMarks and breakMark, "收盤跌破 5 分 20MA", shape.xcross,
@@ -122,45 +155,67 @@ plotshape(showMarks and breakMark, "收盤跌破 5 分 20MA", shape.xcross,
 
 alertcondition(touch, "回踩 5 分 20MA", "NQ 於 15 分 20MA 上方回踩 5 分 20MA")
 
-// ── 統計表格 ─────────────────────────────────────────────────────────────────
-var table t = table.new(position.top_right, 2, 10, bgcolor = color.new(color.black, 15),
+// ── 統計表格（全部 ＋ 依 1H 排列三組對照）───────────────────────────────────
+var table t = table.new(position.top_right, 5, 11, bgcolor = color.new(color.black, 15),
      border_width = 1, border_color = color.new(color.gray, 60))
 
-cell(int row, string k, string v, color vc) =>
-    table.cell(t, 0, row, k, text_color = color.white, text_size = size.small,
-         text_halign = text.align_left)
-    table.cell(t, 1, row, v, text_color = vc, text_size = size.small,
+pct(float v, string suffix) =>
+    na(v) ? "—" : str.tostring(v, "#.###") + suffix
+
+cellR(int col, int row, string v, color vc) =>
+    table.cell(t, col, row, v, text_color = vc, text_size = size.small,
          text_halign = text.align_right)
 
-if barstate.islast
-    pBreak      = nTouch > 0 ? 100.0 * nBreak / nTouch : na
-    avgGainPct  = nTouch > 0 ? sumGainPct / nTouch : na
-    avgGainPts  = nTouch > 0 ? sumGainPts / nTouch : na
-    avgDropPct  = nTouch > 0 ? sumDropPct / nTouch : na
-    medGainPct  = array.size(gains) > 0 ? array.median(gains) : na
-    avgGainHold = nHold > 0 ? sumGainHold / nHold : na
-    avgGainBrk  = nBreak > 0 ? sumGainBrk / nBreak : na
+writeCol(int col, int n, int nb, int nh, float sg, float spts, float sd,
+         float sgh, float sgb, float med) =>
+    cellR(col, 2, str.tostring(n), color.white)
+    cellR(col, 3, str.tostring(nb), color.red)
+    cellR(col, 4, n > 0 ? str.tostring(100.0 * nb / n, "#.#") + "%" : "—", color.red)
+    cellR(col, 5, n > 0 ? pct(sg / n, "%") + "(" + str.tostring(spts / n, "#") + "點)" : "—", color.green)
+    cellR(col, 6, pct(med, "%"), color.green)
+    cellR(col, 7, nh > 0 ? pct(sgh / nh, "%") : "—", color.lime)
+    cellR(col, 8, nb > 0 ? pct(sgb / nb, "%") : "—", color.orange)
+    cellR(col, 9, n > 0 ? pct(sd / n, "%") : "—", color.red)
 
-    table.cell(t, 0, 0, "回踩5分20MA統計（15分20MA上方）", text_color = color.yellow,
+if barstate.islast
+    table.cell(t, 0, 0, "NQ 回踩5分20MA統計（15分20MA上方）" +
+         (timeframe.period == "5" ? "" : "　⚠ 請切到5分圖"),
+         text_color = timeframe.period == "5" ? color.yellow : color.red,
          text_size = size.small, text_halign = text.align_left)
-    table.cell(t, 1, 0, timeframe.period == "5" ? "5分圖 ✓" : "⚠ 請切到5分圖",
-         text_color = timeframe.period == "5" ? color.green : color.red,
-         text_size = size.small, text_halign = text.align_right)
-    cell(1, "回踩次數（樣本數）", str.tostring(nTouch), color.white)
-    cell(2, "跌破次數", str.tostring(nBreak), color.red)
-    cell(3, "跌破機率", na(pBreak) ? "—" : str.tostring(pBreak, "#.#") + "%", color.red)
-    cell(4, "未來" + str.tostring(fwdBars) + "根 平均最大漲幅",
-         na(avgGainPct) ? "—" : str.tostring(avgGainPct, "#.###") + "%（" +
-         str.tostring(avgGainPts, "#.#") + " 點）", color.green)
-    cell(5, "最大漲幅中位數", na(medGainPct) ? "—" : str.tostring(medGainPct, "#.###") + "%",
-         color.green)
-    cell(6, "守住時 平均最大漲幅", na(avgGainHold) ? "—" :
-         str.tostring(avgGainHold, "#.###") + "%", color.lime)
-    cell(7, "跌破時 平均最大漲幅", na(avgGainBrk) ? "—" :
-         str.tostring(avgGainBrk, "#.###") + "%", color.orange)
-    cell(8, "未來" + str.tostring(fwdBars) + "根 平均最大跌幅",
-         na(avgDropPct) ? "—" : str.tostring(avgDropPct, "#.###") + "%", color.red)
-    cell(9, "圖表資料起點",
+    table.merge_cells(t, 0, 0, 4, 0)
+
+    heads = array.from("", "全部", "1H多頭", "1H空頭", "其他")
+    for colI = 0 to 4
+        table.cell(t, colI, 1, array.get(heads, colI), text_color = color.yellow,
+             text_size = size.small, text_halign = text.align_right)
+    rows = array.from("樣本數", "跌破次數", "跌破機率",
+         "未來" + str.tostring(fwdBars) + "根 平均最大漲幅", "最大漲幅中位數",
+         "守住時 平均最大漲幅", "跌破時 平均最大漲幅",
+         "未來" + str.tostring(fwdBars) + "根 平均最大跌幅")
+    for rowI = 0 to 7
+        table.cell(t, 0, rowI + 2, array.get(rows, rowI), text_color = color.white,
+             text_size = size.small, text_halign = text.align_left)
+
+    // 全部 = 三組合計
+    allGains = array.copy(gain0)
+    array.concat(allGains, gain1)
+    array.concat(allGains, gain2)
+    totN  = array.sum(nT)
+    totB  = array.sum(nB)
+    totH  = array.sum(nH)
+    writeCol(1, totN, totB, totH, array.sum(sG), array.sum(sPts), array.sum(sD),
+         array.sum(sGH), array.sum(sGB),
+         array.size(allGains) > 0 ? array.median(allGains) : na)
+    for g = 0 to 2
+        garr = g == 0 ? gain0 : g == 1 ? gain1 : gain2
+        writeCol(g + 2, array.get(nT, g), array.get(nB, g), array.get(nH, g),
+             array.get(sG, g), array.get(sPts, g), array.get(sD, g),
+             array.get(sGH, g), array.get(sGB, g),
+             array.size(garr) > 0 ? array.median(garr) : na)
+
+    table.cell(t, 0, 10, "圖表資料起點：" +
          str.format_time(firstBarT, "yyyy-MM-dd", "America/New_York") +
-         (firstBarT > startTime ? " ⚠ 未達開始日期" : ""),
-         firstBarT > startTime ? color.orange : color.gray)
+         (firstBarT > startTime ? "　⚠ 未達開始日期" : ""),
+         text_color = firstBarT > startTime ? color.orange : color.gray,
+         text_size = size.small, text_halign = text.align_left)
+    table.merge_cells(t, 0, 10, 4, 10)
