@@ -130,7 +130,8 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 
 | 檔案 | 用途 |
 |---|---|
-| `tradingview/nq_pullback_ma5_stats.pine` | 貼進 TradingView（NQ 5 分鐘圖）即時統計，右上角表格顯示結果 |
+| `tradingview/nq_pullback_ma5_stats.pine` | 指標版：貼進 TradingView（NQ 5 分鐘圖）即時統計，右上角表格顯示結果（範圍受方案的圖表 K 棒上限限制） |
+| `tradingview/nq_pullback_ma5_strategy.pine` | 策略版：搭配深度回測（Deep Backtesting，Premium 以上）可跑滿完整兩年；跌破機率與平均最大漲幅由交易清單 CSV 統計（出場訊號「跌破」比例、Run-up % 平均） |
 | `backtest/nq_ma_pullback_backtest.py` | 本地回測，資料來源可選 Futu OpenD（`US.NQmain`）、yfinance（`NQ=F`）或 TradingView 匯出 CSV |
 
 ```bash

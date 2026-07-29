@@ -1,0 +1,166 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+// NQ 回踩 5 分 20MA 統計｜策略版（深度回測用）
+//
+// 為什麼需要策略版：
+//   指標版（nq_pullback_ma5_stats.pine）只能統計圖表實際載入的 K 棒，
+//   受 TradingView 方案的歷史上限限制，多數方案吃不到完整兩年的 5 分 K。
+//   「深度回測（Deep Backtesting）」只開放給 strategy 腳本（Premium 以上），
+//   會另外回補圖表以外的歷史資料——這是在 TradingView 上跑滿兩年的方法。
+//
+// 使用步驟（取得「美股正常盤、過去兩年」的統計）：
+//   1. NQ（例如 CME_MINI:NQ1!）5 分鐘圖，加入本策略。
+//   2. 開啟「策略測試器」→ 切到「深度回測」模式 → 日期設 2024-07-28 ~ 今天
+//      → 產生報告。
+//   3. 跌破機率：把「交易清單」匯出 CSV，出場訊號 =「跌破」的筆數 ÷ 總交易筆數。
+//   4. 平均最大漲幅：交易清單「Run-up %」欄位取平均（即每筆交易的最大有利波動，
+//      基準 = 回踩當根收盤價 = 進場價）。要換算點數：Run-up USD ÷ 20（NQ 一口
+//      $20/點；MNQ 為 $2/點）。
+//   5. 一般（非深度回測）模式下，右上角仍會顯示與指標版相同的統計表格。
+//
+// 交易 = 統計事件的對應方式：
+//   • 進場：回踩事件成立時，於回踩當根「收盤」市價買進 1 口
+//     （process_orders_on_close，成交價 = 回踩當根收盤價）。
+//   • 出場：之後任一根收盤 < 5 分 20MA → 當根收盤出場，訊號「跌破」；
+//     否則持有滿 6 根 → 第 6 根收盤出場，訊號「持有6根」。
+//
+// 與指標版的三個已知差異（交叉核對時請注意）：
+//   1. 漲幅基準是「回踩當根收盤價」（指標版預設用 MA 值；把指標版
+//      「漲跌幅基準價」改成回踩當根收盤價即可對齊）。
+//   2. 跌破從回踩「次一根」起算（進場成交在回踩當根收盤，同根無法再出場；
+//      對齊指標版請關閉「跌破判定含回踩當根」）。
+//   3. 前一筆未出場時又出現的回踩不會重複進場（樣本略少於指標版）。
+// ─────────────────────────────────────────────────────────────────────────────
+strategy("NQ 回踩5分20MA統計｜策略版(深度回測)", "回踩5MA策略", overlay = true,
+     process_orders_on_close = true, pyramiding = 0, calc_on_every_tick = false,
+     initial_capital = 1000000, default_qty_type = strategy.fixed,
+     default_qty_value = 1, max_labels_count = 500)
+
+// ── 參數（與指標版一致）─────────────────────────────────────────────────────
+maLen           = input.int(20, "MA 長度", minval = 1)
+htf             = input.timeframe("15", "趨勢過濾週期")
+fwdBars         = input.int(6, "持有 K 棒數（未來觀察根數）", minval = 1, maxval = 50)
+reArmBars       = input.int(3, "重新計數門檻（連續高於 5 分 MA 的根數）", minval = 1)
+useConfirmedHTF = input.bool(true, "15分MA 用已收盤值（不重繪）")
+strictAbove15   = input.bool(false, "回踩當根低點也須高於 15 分 MA")
+useSession      = input.bool(true, "只統計指定時段（美東時間）")
+sess            = input.session("0930-1600", "統計時段")
+startTime       = input.time(timestamp("28 Jul 2024 00:00 +0000"), "開始日期",
+     tooltip = "深度回測模式的實際範圍以策略測試器的日期設定為準")
+showMarks       = input.bool(true, "顯示回踩標記")
+
+// ── 均線 ────────────────────────────────────────────────────────────────────
+ma5 = ta.sma(close, maLen)
+htfMaConfirmed = request.security(syminfo.tickerid, htf, ta.sma(close, maLen)[1],
+     lookahead = barmerge.lookahead_on)
+htfMaLive = request.security(syminfo.tickerid, htf, ta.sma(close, maLen),
+     lookahead = barmerge.lookahead_off)
+ma15 = useConfirmedHTF ? htfMaConfirmed : htfMaLive
+
+plot(ma5, "5分 20MA", color.orange, 2)
+plot(ma15, "15分 20MA", color.new(color.blue, 0), 2)
+
+// ── 事件偵測（與指標版相同）─────────────────────────────────────────────────
+var int aboveCnt = 0
+aboveCnt := low > ma5 ? aboveCnt + 1 : 0
+
+var int firstBarT = na
+if na(firstBarT)
+    firstBarT := time
+
+inSession = not useSession or not na(time(timeframe.period, sess, "America/New_York"))
+trendOK   = close[1] > ma15 and (not strictAbove15 or low > ma15)
+touch     = aboveCnt[1] >= reArmBars and low <= ma5 and trendOK and
+     not na(ma15) and time >= startTime and inSession
+
+plotshape(showMarks and touch, "回踩 5 分 20MA", shape.triangleup,
+     location.belowbar, color.orange, size = size.tiny)
+
+// ── 進出場 ──────────────────────────────────────────────────────────────────
+if touch and strategy.position_size == 0
+    strategy.entry("回踩", strategy.long, comment = "回踩進場")
+
+if strategy.position_size > 0
+    heldBars = bar_index - strategy.opentrades.entry_bar_index(0)
+    if close < ma5 and heldBars >= 1
+        strategy.close("回踩", comment = "跌破")
+    else if heldBars >= fwdBars
+        strategy.close("回踩", comment = "持有" + str.tostring(fwdBars) + "根")
+
+// ── 統計表格（一般模式用；口徑同上述交易定義：收盤基準、跌破從次一根起算）──
+hh = ta.highest(high, fwdBars)
+ll = ta.lowest(low, fwdBars)
+
+var int   nTouch   = 0
+var int   nBreak   = 0
+var float sumGainPct  = 0.0
+var float sumGainPts  = 0.0
+var float sumDropPct  = 0.0
+var float sumGainHold = 0.0
+var int   nHold       = 0
+var float sumGainBrk  = 0.0
+var array<float> gains = array.new_float()
+
+if touch[fwdBars] and barstate.isconfirmed
+    float ref = close[fwdBars]
+    bool broke = false
+    for i = 0 to fwdBars - 1
+        if close[i] < ma5[i]
+            broke := true
+    if not na(ref) and ref > 0
+        gainPts = hh - ref
+        gainPct = 100.0 * gainPts / ref
+        dropPct = 100.0 * (ll - ref) / ref
+        nTouch      += 1
+        sumGainPct  += gainPct
+        sumGainPts  += gainPts
+        sumDropPct  += dropPct
+        array.push(gains, gainPct)
+        if broke
+            nBreak     += 1
+            sumGainBrk += gainPct
+        else
+            nHold       += 1
+            sumGainHold += gainPct
+
+var table t = table.new(position.top_right, 2, 10, bgcolor = color.new(color.black, 15),
+     border_width = 1, border_color = color.new(color.gray, 60))
+
+cell(int row, string k, string v, color vc) =>
+    table.cell(t, 0, row, k, text_color = color.white, text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(t, 1, row, v, text_color = vc, text_size = size.small,
+         text_halign = text.align_right)
+
+if barstate.islast
+    pBreak      = nTouch > 0 ? 100.0 * nBreak / nTouch : na
+    avgGainPct  = nTouch > 0 ? sumGainPct / nTouch : na
+    avgGainPts  = nTouch > 0 ? sumGainPts / nTouch : na
+    avgDropPct  = nTouch > 0 ? sumDropPct / nTouch : na
+    medGainPct  = array.size(gains) > 0 ? array.median(gains) : na
+    avgGainHold = nHold > 0 ? sumGainHold / nHold : na
+    avgGainBrk  = nBreak > 0 ? sumGainBrk / nBreak : na
+
+    table.cell(t, 0, 0, "回踩5分20MA統計・策略版（收盤基準）", text_color = color.yellow,
+         text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, 0, timeframe.period == "5" ? "5分圖 ✓" : "⚠ 請切到5分圖",
+         text_color = timeframe.period == "5" ? color.green : color.red,
+         text_size = size.small, text_halign = text.align_right)
+    cell(1, "回踩次數（含重疊事件）", str.tostring(nTouch), color.white)
+    cell(2, "跌破次數", str.tostring(nBreak), color.red)
+    cell(3, "跌破機率", na(pBreak) ? "—" : str.tostring(pBreak, "#.#") + "%", color.red)
+    cell(4, "未來" + str.tostring(fwdBars) + "根 平均最大漲幅",
+         na(avgGainPct) ? "—" : str.tostring(avgGainPct, "#.###") + "%（" +
+         str.tostring(avgGainPts, "#.#") + " 點）", color.green)
+    cell(5, "最大漲幅中位數", na(medGainPct) ? "—" : str.tostring(medGainPct, "#.###") + "%",
+         color.green)
+    cell(6, "守住時 平均最大漲幅", na(avgGainHold) ? "—" :
+         str.tostring(avgGainHold, "#.###") + "%", color.lime)
+    cell(7, "跌破時 平均最大漲幅", na(avgGainBrk) ? "—" :
+         str.tostring(avgGainBrk, "#.###") + "%", color.orange)
+    cell(8, "未來" + str.tostring(fwdBars) + "根 平均最大跌幅",
+         na(avgDropPct) ? "—" : str.tostring(avgDropPct, "#.###") + "%", color.red)
+    cell(9, "圖表資料起點",
+         str.format_time(firstBarT, "yyyy-MM-dd", "America/New_York") +
+         (firstBarT > startTime ? " ⚠ 未達開始日期（深度回測不受此限）" : ""),
+         firstBarT > startTime ? color.orange : color.gray)
