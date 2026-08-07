@@ -246,6 +246,8 @@ def main() -> None:
     ap.add_argument("--session", help='回踩發生時間限定美東時段，例如 "0930-1600"')
     ap.add_argument("--ref-close", action="store_true",
                     help="基準改用回踩當根收盤價（預設用 5 分 20MA 值）")
+    ap.add_argument("--split", choices=["year", "quarter", "month"],
+                    help="另外依時間區間分段輸出（年/季/月）")
     ap.add_argument("--dump-events", help="把每筆事件輸出成 CSV")
     args = ap.parse_args()
 
@@ -261,6 +263,24 @@ def main() -> None:
                     atr_mult=args.atr_mult, prior_high_min=args.prior_high_min,
                     session=args.session, ref_is_ma=not args.ref_close)
     report(r, args.fwd_min, args.atr_mult)
+    if args.split and r["n"] > 0:
+        ev = r["events"]
+        code = {"year": "Y", "quarter": "Q", "month": "M"}[args.split]
+        t = ev["time"]
+        t = t.dt.tz_convert("America/New_York") if t.dt.tz is not None else t
+        print(f"\n── 依區間分段（{args.split}）──")
+        hdr = (f"{'區間':>8} | {'樣本':>5} | {'觸1m20MA':>8} | {'先觸vs先停損':>12} | "
+               f"{'MFE中位':>8} | {'MAE中位':>8}")
+        print(hdr)
+        print("-" * len(hdr))
+        for pkey, sub in ev.groupby(t.dt.to_period(code)):
+            m = len(sub)
+            tgt = 100.0 * (sub["race"] == "先觸1m20MA").sum() / m
+            stp = 100.0 * (sub["race"] == "先破停損").sum() / m
+            print(f"{str(pkey):>8} | {m:>5} | "
+                  f"{100.0 * sub['touch_1m20'].sum() / m:>7.1f}% | "
+                  f"{tgt:>5.1f}%/{stp:>5.1f}% | "
+                  f"{sub['mfe_pct'].median():>7.3f}% | {sub['mae_pct'].median():>7.3f}%")
     if args.dump_events and r["n"] > 0:
         r["events"].to_csv(args.dump_events, index=False)
         print(f"事件明細已輸出：{args.dump_events}")

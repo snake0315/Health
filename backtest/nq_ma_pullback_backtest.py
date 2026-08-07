@@ -228,6 +228,8 @@ def main() -> None:
                     help="漲幅基準改用回踩當根收盤價（預設用 MA 值）")
     ap.add_argument("--h1-ma", default="5,10,20",
                     help='1 小時均線排列的短,中,長長度（預設 "5,10,20"）')
+    ap.add_argument("--split", choices=["year", "quarter", "month"],
+                    help="另外依時間區間分段輸出（年/季/月），檢驗統計的穩定度")
     ap.add_argument("--dump-events", help="把每筆事件輸出成 CSV")
     args = ap.parse_args()
 
@@ -243,6 +245,19 @@ def main() -> None:
     r = backtest(df, ma_len=args.ma_len, fwd=args.fwd, re_arm=args.re_arm,
                  ref_is_ma=not args.ref_close, session=args.session, h1_ma=h1_ma)
     report(r, args.fwd)
+    if args.split and r["n"] > 0:
+        code = {"year": "Y", "quarter": "Q", "month": "M"}[args.split]
+        t = r["events"]["time"]
+        t = t.dt.tz_convert("America/New_York") if t.dt.tz is not None else t
+        print(f"\n── 依區間分段（{args.split}）──")
+        hdr = (f"{'區間':>8} | {'樣本':>5} | {'跌破機率':>7} | "
+               f"{'平均最大漲幅':>10} | {'中位數':>7}")
+        print(hdr)
+        print("-" * len(hdr))
+        for pkey, sub in r["events"].groupby(t.dt.to_period(code)):
+            s = summarize(sub)
+            print(f"{str(pkey):>8} | {s['n']:>5} | {s['p_break']:>6.1f}% | "
+                  f"{s['avg_gain_pct']:>8.3f}% | {s['med_gain_pct']:>6.3f}%")
     if args.dump_events and r["n"] > 0:
         r["events"].to_csv(args.dump_events, index=False)
         print(f"事件明細已輸出：{args.dump_events}")
