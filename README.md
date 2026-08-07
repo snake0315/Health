@@ -133,6 +133,8 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 | `tradingview/nq_pullback_ma5_stats.pine` | 指標版：貼進 TradingView（NQ 5 分鐘圖）即時統計，右上角表格顯示結果（範圍受方案的圖表 K 棒上限限制） |
 | `tradingview/nq_pullback_ma5_strategy.pine` | 策略版：搭配深度回測（Deep Backtesting，Premium 以上）可跑滿完整兩年；跌破機率與平均最大漲幅由交易清單 CSV 統計（出場訊號「跌破」比例、Run-up % 平均） |
 | `backtest/nq_ma_pullback_backtest.py` | 本地回測，資料來源可選 Futu OpenD（`US.NQmain`）、yfinance（`NQ=F`）或 TradingView 匯出 CSV |
+| `tradingview/nq_pullback_1m_event_study.pine` | 1 分圖事件研究：1H＋15分皆多頭時回踩 5 分 20MA，統計反彈觸及 1m 10/20MA、5 分收盤突破前高、先觸 1m20MA vs 先破 1×ATR 停損、MFE/MAE（含 ATR 尺度）。NQ / QQQ 皆可用 |
+| `backtest/nq_pullback_event_study.py` | 同上事件研究的本地版（需 1 分 K）：`--yf QQQ`（約 30 天）、`--futu US.NQmain / US.QQQ`（較長）或 `--csv` |
 
 ```bash
 # yfinance（最近約 60 天 5 分 K）

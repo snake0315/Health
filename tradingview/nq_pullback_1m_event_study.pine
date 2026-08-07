@@ -1,0 +1,179 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+// NQ / QQQ 回踩 5 分 20MA 事件研究（1 分圖微結構版）
+//
+// ※ 請在「1 分鐘圖」使用（NQ 如 CME_MINI:NQ1!，或 NASDAQ:QQQ）。
+//   1 分圖能載入的歷史受方案限制（通常僅數週），表格會顯示實際資料起點；
+//   要更長樣本請用 backtest/nq_pullback_event_study.py 搭配 1 分 K 資料。
+//
+// 條件：
+//   • 1 小時與 15 分鐘皆多頭：前一根 1 分 K 收盤同時高於「已收盤」的
+//     1H 20MA 與 15 分 20MA。
+//   • 價格連續 reArmMin 分鐘（預設 15）低點高於 5 分 20MA 後，
+//     當根 1 分 K 低點觸及 5 分 20MA（已收盤 5 分 K 的 MA 值）→ 一次回踩。
+//   • 基準價 ref = 觸及當下的 5 分 20MA 值；觀察窗 = 之後 fwdMin 分鐘（預設 30）。
+//
+// 統計（觀察窗內的 1 分 K）：
+//   • 反彈觸及 1m 10MA / 1m 20MA（高點碰到）機率
+//   • 反彈「5 分收盤」突破前高（前高 = 觸及前 phLook 分鐘最高價）機率
+//   • 先觸 1m 20MA vs 先破 atrMult×ATR 停損（停損 = ref − atrMult×5分ATR(14)，
+//     同一根同時發生以停損計，保守）
+//   • 平均 / 中位反彈幅度 MFE、反彈幅度(ATR尺度)、平均 / 中位下插 MAE
+// ─────────────────────────────────────────────────────────────────────────────
+indicator("回踩5分20MA事件研究｜1分圖(NQ/QQQ)", "回踩事件研究(1M)", overlay = true, max_labels_count = 500)
+
+// ── 參數 ────────────────────────────────────────────────────────────────────
+maLen     = input.int(20, "5分/15分/1H MA 長度", minval = 1)
+m1FastLen = input.int(10, "1分 短均線", minval = 1)
+m1SlowLen = input.int(20, "1分 長均線", minval = 1)
+fwdMin    = input.int(30, "觀察窗（分鐘）", minval = 5, maxval = 120)
+reArmMin  = input.int(15, "重新計數門檻（連續高於 5 分 MA 的分鐘數）", minval = 1)
+atrLen    = input.int(14, "5分 ATR 長度", minval = 1)
+atrMult   = input.float(1.0, "停損 ATR 倍數", minval = 0.1, step = 0.1)
+phLook    = input.int(60, "前高回看（分鐘）", minval = 5)
+useSession = input.bool(true, "只統計指定時段（美東時間）")
+sess      = input.session("0930-1600", "統計時段")
+startTime = input.time(timestamp("28 Jul 2024 00:00 +0000"), "開始日期")
+showMarks = input.bool(true, "顯示回踩標記")
+
+// ── 高週期均線 / ATR（皆用已收盤值，不重繪）────────────────────────────────
+ma5m = request.security(syminfo.tickerid, "5",  ta.sma(close, maLen)[1], lookahead = barmerge.lookahead_on)
+ma15 = request.security(syminfo.tickerid, "15", ta.sma(close, maLen)[1], lookahead = barmerge.lookahead_on)
+ma60 = request.security(syminfo.tickerid, "60", ta.sma(close, maLen)[1], lookahead = barmerge.lookahead_on)
+atr5 = request.security(syminfo.tickerid, "5",  ta.atr(atrLen)[1],       lookahead = barmerge.lookahead_on)
+
+m1f = ta.sma(close, m1FastLen)
+m1s = ta.sma(close, m1SlowLen)
+ph  = ta.highest(high, phLook)   // 含當根的前 phLook 分鐘最高
+
+plot(ma5m, "5分 20MA", color.orange, 2)
+plot(ma15, "15分 20MA", color.new(color.blue, 0), 1)
+plot(ma60, "1H 20MA", color.new(color.purple, 0), 1)
+plot(m1s, "1分 20MA", color.new(color.gray, 40), 1)
+
+// ── 事件偵測 ─────────────────────────────────────────────────────────────────
+var int aboveCnt = 0
+aboveCnt := low > ma5m ? aboveCnt + 1 : 0
+
+var int firstBarT = na
+if na(firstBarT)
+    firstBarT := time
+
+inSession = not useSession or not na(time(timeframe.period, sess, "America/New_York"))
+touch = aboveCnt[1] >= reArmMin and low <= ma5m and
+     close[1] > ma15 and close[1] > ma60 and
+     not na(ma60) and not na(atr5) and not na(m1s) and
+     time >= startTime and inSession
+
+plotshape(showMarks and touch, "回踩 5 分 20MA", shape.triangleup,
+     location.belowbar, color.orange, size = size.tiny)
+
+// ── 統計（回踩後第 fwdMin 根 1 分 K 收盤時回頭結算）─────────────────────────
+var int   nEv = 0
+var int   nT10 = 0
+var int   nT20 = 0
+var int   nBPH = 0
+var int   nTgt1st = 0
+var int   nStop1st = 0
+var int   nBrk5 = 0
+var float sumMfePct = 0.0
+var float sumMfePts = 0.0
+var float sumMfeAtr = 0.0
+var float sumMaePct = 0.0
+var float sumMaeAtr = 0.0
+var array<float> mfeArr = array.new_float()
+var array<float> mfeAtrArr = array.new_float()
+var array<float> maeArr = array.new_float()
+var array<float> maeAtrArr = array.new_float()
+
+hh = ta.highest(high, fwdMin)
+ll = ta.lowest(low, fwdMin)
+
+if touch[fwdMin] and barstate.isconfirmed
+    float ref  = ma5m[fwdMin]
+    float atrV = atr5[fwdMin]
+    float stop = ref - atrMult * atrV
+    float prevHigh = ph[fwdMin]
+    if not na(ref) and ref > 0 and not na(atrV)
+        bool t10 = false
+        bool t20 = false
+        bool bph = false
+        bool brk5 = false
+        int race = 0   // 0 = 皆未觸發, 1 = 先觸1m20MA, 2 = 先破停損
+        for k = 1 to fwdMin
+            idx = fwdMin - k          // 依時間順序：回踩後第 1..fwdMin 根
+            if high[idx] >= m1f[idx]
+                t10 := true
+            if high[idx] >= m1s[idx]
+                t20 := true
+            bool is5c = time[idx] % 300000 == 240000   // 該 1 分 K 收盤 = 5 分 K 收盤
+            if is5c and close[idx] > prevHigh
+                bph := true
+            if is5c and close[idx] < ma5m[idx]
+                brk5 := true
+            if race == 0
+                if low[idx] <= stop
+                    race := 2
+                else if high[idx] >= m1s[idx]
+                    race := 1
+        mfePts = hh - ref
+        mfePct = 100.0 * mfePts / ref
+        maePts = ll - ref
+        maePct = 100.0 * maePts / ref
+        nEv += 1
+        nT10 += t10 ? 1 : 0
+        nT20 += t20 ? 1 : 0
+        nBPH += bph ? 1 : 0
+        nBrk5 += brk5 ? 1 : 0
+        nTgt1st += race == 1 ? 1 : 0
+        nStop1st += race == 2 ? 1 : 0
+        sumMfePct += mfePct
+        sumMfePts += mfePts
+        sumMfeAtr += mfePts / atrV
+        sumMaePct += maePct
+        sumMaeAtr += maePts / atrV
+        array.push(mfeArr, mfePct)
+        array.push(mfeAtrArr, mfePts / atrV)
+        array.push(maeArr, maePct)
+        array.push(maeAtrArr, maePts / atrV)
+
+// ── 表格 ────────────────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 12, bgcolor = color.new(color.black, 15),
+     border_width = 1, border_color = color.new(color.gray, 60))
+
+cell(int row, string k, string v, color vc) =>
+    table.cell(t, 0, row, k, text_color = color.white, text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(t, 1, row, v, text_color = vc, text_size = size.small,
+         text_halign = text.align_right)
+
+pctOf(int cnt) =>
+    nEv > 0 ? str.tostring(100.0 * cnt / nEv, "#.#") + "%" : "—"
+
+if barstate.islast
+    table.cell(t, 0, 0, "回踩5分20MA事件研究（1H＋15分皆多頭）",
+         text_color = color.yellow, text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, 0, timeframe.period == "1" ? "1分圖 ✓" : "⚠ 請切到1分圖",
+         text_color = timeframe.period == "1" ? color.green : color.red,
+         text_size = size.small, text_halign = text.align_right)
+    cell(1, "樣本數", str.tostring(nEv), color.white)
+    cell(2, "反彈觸及 1m " + str.tostring(m1FastLen) + "MA(高點碰到)", pctOf(nT10), color.green)
+    cell(3, "反彈觸及 1m " + str.tostring(m1SlowLen) + "MA(高點碰到)", pctOf(nT20), color.green)
+    cell(4, "反彈收盤突破前高(5分收盤)", pctOf(nBPH), color.green)
+    cell(5, "先觸1m" + str.tostring(m1SlowLen) + "MA / 先破" + str.tostring(atrMult, "#.#") + "×ATR / 皆無",
+         pctOf(nTgt1st) + " / " + pctOf(nStop1st) + " / " +
+         pctOf(nEv - nTgt1st - nStop1st), color.aqua)
+    cell(6, "平均反彈幅度 MFE", nEv > 0 ? str.tostring(sumMfePct / nEv, "#.###") + "%(" +
+         str.tostring(sumMfePts / nEv, "#.#") + "點)" : "—", color.green)
+    cell(7, "中位反彈幅度", array.size(mfeArr) > 0 ?
+         str.tostring(array.median(mfeArr), "#.###") + "%" : "—", color.green)
+    cell(8, "反彈幅度(ATR尺度) 平均/中位", nEv > 0 ?
+         str.tostring(sumMfeAtr / nEv, "#.##") + " / " +
+         str.tostring(array.median(mfeAtrArr), "#.##") + " ATR" : "—", color.green)
+    cell(9, "平均下插 MAE", nEv > 0 ? str.tostring(sumMaePct / nEv, "#.###") + "%(" +
+         str.tostring(sumMaeAtr / nEv, "#.##") + " ATR)" : "—", color.red)
+    cell(10, "中位下插 MAE", array.size(maeArr) > 0 ?
+         str.tostring(array.median(maeArr), "#.###") + "%(" +
+         str.tostring(array.median(maeAtrArr), "#.##") + " ATR)" : "—", color.red)
+    cell(11, "圖表資料起點", str.format_time(firstBarT, "yyyy-MM-dd", "America/New_York"),
+         color.gray)
