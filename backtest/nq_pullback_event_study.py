@@ -235,8 +235,9 @@ def main() -> None:
                      help="Yahoo 代碼（預設 NQ=F，可用 QQQ；僅最近約 30 天）")
     src.add_argument("--futu", nargs="?", const="US.NQmain", metavar="CODE",
                      help="futu 代碼（預設 US.NQmain，可用 US.QQQ）")
-    ap.add_argument("--start", help="開始日期 YYYY-MM-DD（futu 用）")
-    ap.add_argument("--end", help="結束日期 YYYY-MM-DD（futu 用）")
+    ap.add_argument("--start", help="事件開始日期 YYYY-MM-DD（含當日，美東；"
+                    "futu 會自動多抓前 7 天供均線暖身）")
+    ap.add_argument("--end", help="事件結束日期 YYYY-MM-DD（含當日，美東）")
     ap.add_argument("--fwd-min", type=int, default=30, help="觀察窗分鐘數（預設 30）")
     ap.add_argument("--re-arm-min", type=int, default=15,
                     help="重新計數門檻：連續高於 5 分 MA 的分鐘數（預設 15）")
@@ -256,12 +257,26 @@ def main() -> None:
     elif args.yf:
         df = load_yf_1m(args.yf)
     else:
-        df = load_futu_1m(args.futu, args.start, args.end)
+        fetch_start = (pd.Timestamp(args.start) - pd.Timedelta(days=7)) \
+            .strftime("%Y-%m-%d") if args.start else None
+        df = load_futu_1m(args.futu, fetch_start, args.end)
 
     print(f"資料範圍：{df.index[0]} ~ {df.index[-1]}（{len(df)} 根 1 分 K）")
     r = event_study(df, fwd_min=args.fwd_min, re_arm_min=args.re_arm_min,
                     atr_mult=args.atr_mult, prior_high_min=args.prior_high_min,
                     session=args.session, ref_is_ma=not args.ref_close)
+    # --start/--end 只過濾「事件發生時間」；均線/ATR 一律用完整資料暖身
+    if (args.start or args.end) and r["n"] > 0:
+        tz = "America/New_York"
+        t = r["events"]["time"]
+        tt = t.dt.tz_convert(tz) if t.dt.tz is not None else t.dt.tz_localize(tz)
+        m = pd.Series(True, index=r["events"].index)
+        if args.start:
+            m &= tt >= pd.Timestamp(args.start, tz=tz)
+        if args.end:
+            m &= tt < pd.Timestamp(args.end, tz=tz) + pd.Timedelta(days=1)
+        r = {"n": int(m.sum()), "events": r["events"][m]}
+        print(f"事件時間過濾（美東）：{args.start or '…'} ~ {args.end or '…'}")
     report(r, args.fwd_min, args.atr_mult)
     if args.split and r["n"] > 0:
         ev = r["events"]

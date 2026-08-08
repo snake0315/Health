@@ -216,8 +216,9 @@ def main() -> None:
     src.add_argument("--yf", action="store_true", help="用 yfinance 抓 NQ=F（最近約 60 天）")
     src.add_argument("--futu", action="store_true", help="用 Futu OpenD 抓資料")
     ap.add_argument("--code", default="US.NQmain", help="futu 代碼（預設 US.NQmain）")
-    ap.add_argument("--start", help="開始日期 YYYY-MM-DD（futu 用）")
-    ap.add_argument("--end", help="結束日期 YYYY-MM-DD（futu 用）")
+    ap.add_argument("--start", help="事件開始日期 YYYY-MM-DD（含當日，美東；"
+                    "futu 會自動多抓前 7 天供均線暖身）")
+    ap.add_argument("--end", help="事件結束日期 YYYY-MM-DD（含當日，美東）")
     ap.add_argument("--ma-len", type=int, default=20)
     ap.add_argument("--fwd", type=int, default=6, help="未來觀察 K 棒數（預設 6）")
     ap.add_argument("--re-arm", type=int, default=3,
@@ -238,12 +239,33 @@ def main() -> None:
     elif args.yf:
         df = load_yf()
     else:
-        df = load_futu(args.code, args.start, args.end)
+        fetch_start = (pd.Timestamp(args.start) - pd.Timedelta(days=7)) \
+            .strftime("%Y-%m-%d") if args.start else None
+        df = load_futu(args.code, fetch_start, args.end)
 
     print(f"資料範圍：{df.index[0]} ~ {df.index[-1]}（{len(df)} 根 5 分 K）")
     h1_ma = tuple(int(x) for x in args.h1_ma.split(","))
     r = backtest(df, ma_len=args.ma_len, fwd=args.fwd, re_arm=args.re_arm,
                  ref_is_ma=not args.ref_close, session=args.session, h1_ma=h1_ma)
+    # --start/--end 只過濾「事件發生時間」；均線一律用完整資料暖身
+    if (args.start or args.end) and r["n"] > 0:
+        tz = "America/New_York"
+        t = r["events"]["time"]
+        tt = t.dt.tz_convert(tz) if t.dt.tz is not None else t.dt.tz_localize(tz)
+        m = pd.Series(True, index=r["events"].index)
+        if args.start:
+            m &= tt >= pd.Timestamp(args.start, tz=tz)
+        if args.end:
+            m &= tt < pd.Timestamp(args.end, tz=tz) + pd.Timedelta(days=1)
+        ev = r["events"][m]
+        print(f"事件時間過濾（美東）：{args.start or '…'} ~ {args.end or '…'}")
+        if len(ev):
+            r = summarize(ev)
+            r["events"] = ev
+            r["groups"] = {g: summarize(ev[ev["h1"] == g])
+                           for g in ("1H多頭", "1H空頭", "其他") if (ev["h1"] == g).any()}
+        else:
+            r = {"n": 0}
     report(r, args.fwd)
     if args.split and r["n"] > 0:
         code = {"year": "Y", "quarter": "Q", "month": "M"}[args.split]
