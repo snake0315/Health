@@ -129,7 +129,9 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 `analysis/july_first5.py` 用上面的 `get_history_kline` 工具，統計**過去 N 年、
 每年 7 月前 K 個交易日**的 SPY / QQQ **每日漲跌幅**與**波動度**（日內振幅 + 漲跌幅標準差）。
 
-> 需先啟動並登入 OpenD（同一般用法），因為資料是即時向富途伺服器取得的。
+支援兩種資料來源：
+
+**Futu 模式**（預設）— 需先啟動並登入 OpenD（同一般用法）：
 
 ```bash
 # 預設：US.SPY / US.QQQ、過去 10 年、每年 7 月前 5 個交易日
@@ -138,6 +140,14 @@ python analysis/july_first5.py
 # 自訂範圍並輸出明細 CSV
 python analysis/july_first5.py --years 10 --days 5 \
     --symbols US.SPY US.QQQ --csv july_first5.csv
+```
+
+**離線 CSV 模式** — 不需要 OpenD 也不需要安裝 futu-api。先自行下載日 K CSV
+（Yahoo Finance「Historical Data」匯出，或 Stooq：
+`https://stooq.com/q/d/l/?s=spy.us&i=d` 與 `?s=qqq.us`），再：
+
+```bash
+python analysis/july_first5.py --from-csv SPY=spy_us_d.csv QQQ=qqq_us_d.csv
 ```
 
 輸出欄位：`daily_chg%`＝收盤對前一日收盤漲跌幅；`range%`＝當日 (最高-最低)/前收
