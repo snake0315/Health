@@ -135,6 +135,7 @@ python -c "from server import get_market_snapshot; print(get_market_snapshot(['U
 | `backtest/nq_ma_pullback_backtest.py` | 本地回測，資料來源可選 Futu OpenD（`US.NQmain`）、yfinance（`NQ=F`）或 TradingView 匯出 CSV |
 | `tradingview/nq_pullback_1m_event_study.pine` | 1 分圖事件研究：1H＋15分皆多頭時回踩 5 分 20MA，統計反彈觸及 1m 10/20MA、5 分收盤突破前高、先觸 1m20MA vs 先破 1×ATR 停損、MFE/MAE（含 ATR 尺度）。NQ / QQQ 皆可用 |
 | `backtest/nq_pullback_event_study.py` | 同上事件研究的本地版（需 1 分 K）：`--yf QQQ`（約 30 天）、`--futu US.NQmain / US.QQQ`（較長）或 `--csv` |
+| `backtest/nq_ma15_limit_study.py` | 1H＋15分同向時，在 15 分 20MA 掛 limit 進場 → 回到 5 分 20MA 的機率、先到目標 vs 先停損、期望值；附布朗橋隨機基準（`--null`）與依距離加權的對照。讀 1 分 K parquet/csv，自動做換月回溯調整。真實 NQ 2020-09～2025-11 結果見 `backtest/results/` |
 
 ```bash
 # yfinance（最近約 60 天 5 分 K）
